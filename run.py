@@ -55,6 +55,9 @@ if __name__ == '__main__':
     parser.add_argument('--use_D', type=int, default=0, help='whether to use D for MambaSL')
     parser.add_argument('--top_k', type=int, default=5, help='for TimesBlock')
     parser.add_argument('--num_kernels', type=int, default=6, help='for Inception')
+    #MOFIFY 2: choose the conv type from the command line
+    parser.add_argument('--use_inception', type=int, default=0,
+                    help='1: original Inception multi-kernel block, 0: single fixed 3x3 kernel')
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
     parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')
     parser.add_argument('--c_out', type=int, default=7, help='output size')
@@ -95,6 +98,22 @@ if __name__ == '__main__':
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
+
+    # OurTimesNet (our re-implementation, see models/OurTimesNet.py):
+    # every architectural choice of TimesNet is exposed as a flag so that each
+    # ablation variant is a CLI configuration, not a separate model file.
+    # NOTE: these flags are NOT part of the auto-generated 'setting' string,
+    # so always use a distinct --model_id per variant (e.g. ABL_fixed24)
+    # to avoid overwriting checkpoints/curves of other variants.
+    parser.add_argument('--period_mode', type=str, default='fft', choices=['fft', 'fixed'],
+                        help='OurTimesNet: fft = discover top-k periods via FFT (paper); '
+                             'fixed = impose --fixed_periods (justified on the TRAINING split only, no test leakage)')
+    parser.add_argument('--fixed_periods', type=str, default='24',
+                        help='OurTimesNet: comma-separated periods in time steps, e.g. "24" or "24,168" (used when --period_mode fixed)')
+    parser.add_argument('--block_type', type=str, default='inception', choices=['inception', 'simple'],
+                        help='OurTimesNet: inception = multi-kernel conv block (paper); simple = single 3x3 conv (ablation)')
+    parser.add_argument('--use_2d', type=int, default=1, choices=[0, 1],
+                        help='OurTimesNet: 1 = 2D reshape by period (paper); 0 = plain 1D convolutions (ablation)')
 
     # per-batch validation/test error tracking + plotting (on by default)
     parser.add_argument('--track_batch_error', action='store_true', default=True,

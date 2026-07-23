@@ -1,77 +1,67 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.fft
-import numpy as np
 from layers.Embed import DataEmbedding
 from layers.Conv_Blocks import Inception_Block_V1
 
+#MODIFY 1: use a fixed period of 24 hours instead of finding the best period,
+#24 hours is the result of period_study.py on the train set
 
-def FFT_fixed_Period(x, k=2):
-    # [B, T, C]
-    # FIXED-PERIOD variant of TimesNet: instead of discovering the dominant
-    # periods via FFT, we impose a SINGLE hand-chosen daily period of 24
-    # (Electricity is sampled hourly -> 24 steps/day). top_k is ignored here.
-    # fp32 for the FFT: cuFFT in half precision (AMP) only supports
-    # power-of-two sizes, and seq_len+pred_len generally isn't one
-    xf = torch.fft.rfft(x.float(), dim=1)
-    amp = abs(xf).mean(-1)              # [B, F] amplitude spectrum per sample
+FIXED_PERIOD = 24   #found by period_study.py on the train set 
 
-    period = np.array([24])            # single fixed period 24
-    freq_idx = x.shape[1] // 24        # FFT frequency corresponding to period 24
-    period_weight = amp[:, freq_idx:freq_idx + 1]  # [B, 1] weight for the branch
+def fixed_period():
 
-    return period, period_weight
+    return FIXED_PERIOD
 
 class TimesBlock(nn.Module):
+
     def __init__(self, configs):
         super(TimesBlock, self).__init__()
         self.seq_len = configs.seq_len
         self.pred_len = configs.pred_len
-        self.k = configs.top_k
-        # parameter-efficient design
-        self.conv = nn.Sequential(
-            Inception_Block_V1(configs.d_model, configs.d_ff,
-                               num_kernels=configs.num_kernels),
-            nn.GELU(),
-            Inception_Block_V1(configs.d_ff, configs.d_model,
-                               num_kernels=configs.num_kernels)
-        )
+
+        #MODIFY 2: choose the conv type from the command line
+        self.use_inception = configs.use_inception
+
+        if self.use_inception == 1:
+            #original TimesNet conv: 6 parallel kernels (1x1 ... 11x11), averaged
+            self.conv = nn.Sequential(
+                Inception_Block_V1(configs.d_model, configs.d_ff,
+                                   num_kernels=configs.num_kernels),
+                nn.GELU(),
+                Inception_Block_V1(configs.d_ff, configs.d_model,
+                                   num_kernels=configs.num_kernels)
+            )
+        else:
+            #our simple version: one fixed 3x3 kernel per stage
+            self.conv = nn.Sequential(
+                nn.Conv2d(configs.d_model, configs.d_ff, kernel_size=3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(configs.d_ff, configs.d_model, kernel_size=3, padding=1)
+            )
 
     def forward(self, x):
-        B, T, N = x.size()
-        period_list, period_weight = FFT_fixed_Period(x, self.k)
 
-        res = []
-        for i in range(len(period_list)):
-            period = period_list[i]
-            # padding
-            if (self.seq_len + self.pred_len) % period != 0:
-                length = (
-                                 ((self.seq_len + self.pred_len) // period) + 1) * period
-                padding = torch.zeros([x.shape[0], (length - (self.seq_len + self.pred_len)), x.shape[2]]).to(x.device)
-                out = torch.cat([x, padding], dim=1)
-            else:
-                length = (self.seq_len + self.pred_len)
-                out = x
-            # reshape
-            out = out.reshape(B, length // period, period,
-                              N).permute(0, 3, 1, 2).contiguous()
-            # 2D conv: from 1d Variation to 2d Variation
-            out = self.conv(out)
-            # reshape back
-            out = out.permute(0, 2, 3, 1).reshape(B, -1, N)
-            res.append(out[:, :(self.seq_len + self.pred_len), :])
-        res = torch.stack(res, dim=-1)
-        # adaptive aggregation
-        period_weight = F.softmax(period_weight, dim=1)
-        period_weight = period_weight.unsqueeze(
-            1).unsqueeze(1).repeat(1, T, N, 1)
-        res = torch.sum(res * period_weight, -1)
-        # residual connection
-        res = res + x
-        return res
+        B, _, N = x.size() 
+        period = fixed_period()
 
+        #no padding needed: all our sequence lengths (192, 288, 432, 816) are multiples of the period (24)
+        T = self.seq_len + self.pred_len
+        out = x
+
+        #reshape 1D -> 2D: rows = days, columns = hours of the day
+        out = out.reshape(B, T // period, period, N).permute(0, 3, 1, 2).contiguous()
+
+        #2D convolution on the (days x hours) image
+        out = self.conv(out)
+
+        #reshape back 2D -> 1D for the residual connection
+        out = out.permute(0, 2, 3, 1).reshape(B, -1, N)
+        out = out[:, :(self.seq_len + self.pred_len), :]
+
+        #residual connection
+        out = out + x
+        return out
 
 class Model(nn.Module):
     """

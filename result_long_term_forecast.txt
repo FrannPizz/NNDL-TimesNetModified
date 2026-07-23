@@ -58,3 +58,15 @@ mse:0.251420259475708, mae:0.33514392375946045, dtw:Not calculated
 long_term_forecast_ECL128_96_720_TimesNet_custom_ftM_sl96_ll48_pl720_dm128_nh8_el2_dl1_df128_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0  
 mse:0.2910322844982147, mae:0.36370688676834106, dtw:Not calculated
 
+long_term_forecast_ECL_96_96_SeasonalNaive24_custom_ftM_sl96_ll48_pl96_notrain_Exp_0  
+mse:0.3210950401342283, mae:0.32576864213944795, dtw:Not calculated
+
+long_term_forecast_ECL_96_192_SeasonalNaive24_custom_ftM_sl96_ll48_pl192_notrain_Exp_0  
+mse:0.3043195715540662, mae:0.32374135879544913, dtw:Not calculated
+
+long_term_forecast_ECL_96_336_SeasonalNaive24_custom_ftM_sl96_ll48_pl336_notrain_Exp_0  
+mse:0.327308283900766, mae:0.3426867903334181, dtw:Not calculated
+
+long_term_forecast_ECL_96_720_SeasonalNaive24_custom_ftM_sl96_ll48_pl720_notrain_Exp_0  
+mse:0.3669876549564989, mae:0.3732839403802231, dtw:Not calculated
+
