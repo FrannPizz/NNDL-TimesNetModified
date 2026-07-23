@@ -1,0 +1,15 @@
+# ambiente virtuale (si ricrea: py -3.11 -m venv .venv + pip install)
+.venv/
+
+# output pesanti degli esperimenti (non versionabili su GitHub)
+results/
+checkpoints/
+
+# cache
+__pycache__/
+*.pyc
+dataset/.cache/
+
+# file di sistema
+.DS_Store
+Thumbs.db

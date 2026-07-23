@@ -1,0 +1,17 @@
+# Dipendenze minime per far girare DLinear / TimesNet / TimesNetFixedPeriod
+# sul task long_term_forecast con dataset Electricity ('custom').
+# NB: torch NON e' qui: si installa a parte dal canale CUDA (vedi comandi sotto).
+
+# --- core ---
+numpy==2.1.2
+pandas==2.3.3
+scikit-learn==1.7.2
+matplotlib==3.10.8
+
+# --- servono solo perche' data_provider/data_loader.py le importa a livello di modulo
+#     (loader di dataset che tu NON usi, ma l'import fallirebbe senza) ---
+sktime==0.40.1
+datasets==4.5.0
+huggingface_hub==0.36.0
+patool==4.0.3
+tqdm==4.66.5
