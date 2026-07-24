@@ -3,7 +3,7 @@
 Struttura del progetto e istruzioni per riprodurre gli esperimenti.
 Base di codice: [Time-Series-Library (TSLib)](https://github.com/thuml/Time-Series-Library),
 usata **solo** per l'infrastruttura (data loader, ciclo di training) e per il
-modello di riferimento. Il contributo del progetto è `models/OurTimesNet.py`
+modello di riferimento. Il contributo del progetto è `models/TimesNetModified.py`
 e gli script in `analysis/`.
 
 ## Ruolo di ciascun modello
@@ -12,32 +12,33 @@ e gli script in `analysis/`.
 |---|---|
 | `models/TimesNet.py` | Riferimento TSLib, **non modificato**: riproduce i numeri del paper |
 | `models/DLinear.py` | Baseline lineare TSLib, non modificata |
-| `models/OurTimesNet.py` | **Nostra reimplementazione** di TimesNet, parametrizzata per le ablation |
+| `models/TimesNetModified.py` | **Nostra variante** di TimesNet: periodo fisso 24 + flag di ablation `--use_inception` / `--use_2d` |
 | `analysis/seasonal_naive.py` | Baseline seasonal-naive (nessun training) |
-| `models/TimesNetFixedPeriod.py` | Prototipo iniziale (periodo 24 hardcoded), superato da `OurTimesNet --period_mode fixed`; tenuto solo come storico |
 
-## Flag di OurTimesNet (aggiunti a `run.py`)
+## Flag di ablation di TimesNetModified (aggiunti a `run.py`)
 
-- `--period_mode fft|fixed` — scoperta dei periodi via FFT (paper) vs periodi imposti
-- `--fixed_periods 24` / `24,168` — periodi imposti (in ore)
-- `--block_type inception|simple` — blocco multi-kernel (paper) vs singola conv 3×3
-- `--use_2d 1|0` — reshape 2D per periodo (idea centrale del paper) vs conv 1D
+- `--use_inception 1|0` — blocco Inception multi-kernel (paper) vs singola conv 3×3
+- `--use_2d 1|0` — reshape 1D→2D per periodo (idea centrale del paper) vs conv 1D lungo il tempo
+
+Il periodo è fisso a 24 (hardcoded in `FIXED_PERIOD`), quindi lo studio del
+periodo fisso vs scoperta FFT si fa confrontando `TimesNetModified` (completo)
+con `TimesNet` di riferimento (righe `ECL128_*`).
 
 **Nota**: i flag non entrano nel nome del checkpoint → usare sempre un
 `--model_id` diverso per variante (gli script `.bat` lo fanno già).
 
-## Scelta dei periodi fissi senza leakage
+## Scelta del periodo fisso senza leakage
 
-I periodi 24 e 168 sono giustificati **prima** di ogni esperimento da:
+Il periodo 24 è giustificato **prima** di ogni esperimento da:
 
-1. conoscenza di dominio (dati orari → ciclo giornaliero e settimanale);
-2. `analysis/train_periodogram.py`: periodogramma e ACF calcolati **solo sul
+1. conoscenza di dominio (dati orari → ciclo giornaliero);
+2. `analysis/period_study.py`: periodogramma e ACF calcolati **solo sul
    training split** (primo 70% delle righe, identico a `Dataset_Custom`).
    Risultato: picco dominante a 24h (con armoniche 12/8/6h) e massimo locale
    netto a 168h (ampiezza ~830 vs mediana ~120 nella banda 100–300h).
-   Figura: `result/analysis/train_periodogram_acf.png`.
+   Figura: `result/analysis/period_study.png`.
 
-I periodi non sono mai stati selezionati o raffinati guardando metriche di
+Il periodo non è mai stato selezionato o raffinato guardando metriche di
 validation/test.
 
 ## Esperimenti
@@ -49,14 +50,14 @@ standardizzati (stesso protocollo per tutti i modelli).
    d128 ×4 (righe `ECL_*` / `ECL128_*` in `result_long_term_forecast.txt`).
 2. **Seasonal-naive** (`python analysis/seasonal_naive.py`) — già eseguita,
    righe `SeasonalNaive24`: MSE 0.321 / 0.304 / 0.327 / 0.367.
-3. **`run_ours.bat`** — OurTimesNet completo (fft+inception+2D, d128) sui 4
-   orizzonti → tabella principale, righe `OURS128_*`.
-4. **`run_ablation.bat`** — 4 varianti a `pred_len=96` (prassi: ablation a
-   orizzonte fisso), righe `ABL_*`:
-   - `ABL_fixed24` — periodo fisso giornaliero
-   - `ABL_fixed24_168` — giornaliero + settimanale
-   - `ABL_simpleblock` — conv 3×3 al posto dell'Inception block
-   - `ABL_no2d` — senza reshape 2D (testa l'idea centrale del paper)
+3. **`run_modified.bat`** — TimesNetModified completo (fixed24 + inception +
+   2D, d128) sui 4 orizzonti → tabella principale, righe `MOD128_*`.
+4. **`run_ablation.bat`** — 3 varianti a `pred_len=96` (prassi: ablation a
+   orizzonte fisso), righe `ABL_*`. Con il modello completo formano la
+   matrice 2×2 `use_inception` × `use_2d`:
+   - `ABL_simpleblock` (inception=0, 2d=1) — conv 3×3 al posto dell'Inception
+   - `ABL_no2d` (inception=1, 2d=0) — senza reshape 2D (idea centrale del paper)
+   - `ABL_simple1d` (inception=0, 2d=0) — entrambe tolte (TimesNet all'osso)
 
 Ordine consigliato: 3 poi 4 (run notturni; config d128+AMP come i run già
 fatti, così il confronto con `ECL128_*` è ad armi pari).
@@ -72,7 +73,7 @@ uno script alla radice del progetto:
 | `run_TimesNet.bat` | `ECL_*_TimesNet` (d_model 64, primo tentativo) | ✅ eseguito |
 | `run_128_night.bat` | `ECL128_*` (TimesNet riferimento, d_model 128) | ✅ eseguito |
 | `python analysis/seasonal_naive.py` | `SeasonalNaive24` | ✅ eseguito |
-| `run_ours.bat` | `OURS128_*` | ⬜ da eseguire (GPU) |
+| `run_modified.bat` | `MOD128_*` | ⬜ da eseguire (GPU) |
 | `run_ablation.bat` | `ABL_*` | ⬜ da eseguire (GPU) |
 
 ## Pulizia del repo (23 lug 2026)
@@ -88,6 +89,6 @@ funzioni di augmentation DTW-based — innocuo con `--augmentation_ratio 0`
 
 ## Requisiti risposta del docente (recap)
 
-- ✅ contributo centrale = nostra implementazione (`OurTimesNet.py`), TSLib solo riferimento
-- ✅ periodi fissi motivati senza leakage (solo train + dominio)
+- ✅ contributo centrale = nostra implementazione (`TimesNetModified.py`), TSLib solo riferimento
+- ✅ periodo fisso motivato senza leakage (solo train + dominio)
 - ✅ un solo task (long-term forecasting), anomaly detection esclusa

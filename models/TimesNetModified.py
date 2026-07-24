@@ -1,8 +1,36 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from layers.Embed import DataEmbedding
 from layers.Conv_Blocks import Inception_Block_V1
+
+#1D version of Inception_Block_V1: same multi-kernel idea but with Conv1d.
+#Used by the use_2d=0 ablation.
+class InceptionBlock1D(nn.Module):
+    def __init__(self, in_channels, out_channels, num_kernels=6, init_weight=True):
+        super(InceptionBlock1D, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_kernels = num_kernels
+        kernels = []
+        for i in range(self.num_kernels):
+            kernels.append(nn.Conv1d(in_channels, out_channels, kernel_size=2 * i + 1, padding=i))
+        self.kernels = nn.ModuleList(kernels)
+        if init_weight:
+            self._initialize_weights()
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        res_list = []
+        for i in range(self.num_kernels):
+            res_list.append(self.kernels[i](x))
+        res = torch.stack(res_list, dim=-1).mean(-1)
+        return res
 
 #MODIFY 1: use a fixed period of 24 hours instead of finding the best period,
 #24 hours is the result of period_study.py on the train set
@@ -22,27 +50,43 @@ class TimesBlock(nn.Module):
 
         #MODIFY 2: choose the conv type from the command line
         self.use_inception = configs.use_inception
+        #MODIFY 3: choose whether to use 2D conv or 1D conv from the command line
+        self.use_2d = configs.use_2d
+
+        #choose the conv type based on the command line arguments: 2D conv (InceptionBlock_V1) or 1D conv (InceptionBlock1D)
+        if self.use_2d == 1:
+            InceptionBlock = Inception_Block_V1   # 2D, from layers
+            Conv = nn.Conv2d
+        else:
+            InceptionBlock = InceptionBlock1D     # 1D, defined in our class
+            Conv = nn.Conv1d
 
         if self.use_inception == 1:
-            #original TimesNet conv: 6 parallel kernels (1x1 ... 11x11), averaged
             self.conv = nn.Sequential(
-                Inception_Block_V1(configs.d_model, configs.d_ff,
-                                   num_kernels=configs.num_kernels),
+                InceptionBlock(configs.d_model, configs.d_ff, num_kernels=configs.num_kernels),
                 nn.GELU(),
-                Inception_Block_V1(configs.d_ff, configs.d_model,
-                                   num_kernels=configs.num_kernels)
+                InceptionBlock(configs.d_ff, configs.d_model, num_kernels=configs.num_kernels),
             )
         else:
-            #our simple version: one fixed 3x3 kernel per stage
             self.conv = nn.Sequential(
-                nn.Conv2d(configs.d_model, configs.d_ff, kernel_size=3, padding=1),
+                Conv(configs.d_model, configs.d_ff, kernel_size=3, padding=1),
                 nn.GELU(),
-                nn.Conv2d(configs.d_ff, configs.d_model, kernel_size=3, padding=1)
+                Conv(configs.d_ff, configs.d_model, kernel_size=3, padding=1),
             )
 
     def forward(self, x):
 
         B, _, N = x.size() 
+
+        #1D path (use_2d=0). No reshape, no period: just a 1D conv
+        #along time. This ablation tests whether the 2D reshaping matters.
+        if self.use_2d == 0:
+            #Conv1d wants [B, channels, length] = [B, N, T]; our x is [B, T, N]
+            out = x.permute(0, 2, 1)
+            out = self.conv(out)
+            out = out.permute(0, 2, 1)
+            return out + x
+        
         period = fixed_period()
 
         #no padding needed: all our sequence lengths (192, 288, 432, 816) are multiples of the period (24)
@@ -81,19 +125,12 @@ class Model(nn.Module):
                                            configs.dropout)
         self.layer = configs.e_layers
         self.layer_norm = nn.LayerNorm(configs.d_model)
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            self.predict_linear = nn.Linear(
-                self.seq_len, self.pred_len + self.seq_len)
-            self.projection = nn.Linear(
-                configs.d_model, configs.c_out, bias=True)
-        if self.task_name == 'imputation' or self.task_name == 'anomaly_detection':
-            self.projection = nn.Linear(
-                configs.d_model, configs.c_out, bias=True)
-        if self.task_name == 'classification':
-            self.act = F.gelu
-            self.dropout = nn.Dropout(configs.dropout)
-            self.projection = nn.Linear(
-                configs.d_model * configs.seq_len, configs.num_class)
+        # forecasting only: this project targets long-term forecasting, so we
+        # keep just the forecast head (imputation/anomaly/classification removed)
+        self.predict_linear = nn.Linear(
+            self.seq_len, self.pred_len + self.seq_len)
+        self.projection = nn.Linear(
+            configs.d_model, configs.c_out, bias=True)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         # Normalization from Non-stationary Transformer
@@ -122,89 +159,8 @@ class Model(nn.Module):
                       1, self.pred_len + self.seq_len, 1)))
         return dec_out
 
-    def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
-        # Normalization from Non-stationary Transformer
-        means = torch.sum(x_enc, dim=1) / torch.sum(mask == 1, dim=1)
-        means = means.unsqueeze(1).detach()
-        x_enc = x_enc.sub(means)
-        x_enc = x_enc.masked_fill(mask == 0, 0)
-        stdev = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) /
-                           torch.sum(mask == 1, dim=1) + 1e-5)
-        stdev = stdev.unsqueeze(1).detach()
-        x_enc = x_enc.div(stdev)
-
-        # embedding
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)  # [B,T,C]
-        # TimesNet
-        for i in range(self.layer):
-            enc_out = self.layer_norm(self.model[i](enc_out))
-        # project back
-        dec_out = self.projection(enc_out)
-
-        # De-Normalization from Non-stationary Transformer
-        dec_out = dec_out.mul(
-                  (stdev[:, 0, :].unsqueeze(1).repeat(
-                      1, self.pred_len + self.seq_len, 1)))
-        dec_out = dec_out.add(
-                  (means[:, 0, :].unsqueeze(1).repeat(
-                      1, self.pred_len + self.seq_len, 1)))
-        return dec_out
-
-    def anomaly_detection(self, x_enc):
-        # Normalization from Non-stationary Transformer
-        means = x_enc.mean(1, keepdim=True).detach()
-        x_enc = x_enc.sub(means)
-        stdev = torch.sqrt(
-            torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-        x_enc = x_enc.div(stdev)
-
-        # embedding
-        enc_out = self.enc_embedding(x_enc, None)  # [B,T,C]
-        # TimesNet
-        for i in range(self.layer):
-            enc_out = self.layer_norm(self.model[i](enc_out))
-        # project back
-        dec_out = self.projection(enc_out)
-
-        # De-Normalization from Non-stationary Transformer
-        dec_out = dec_out.mul(
-                  (stdev[:, 0, :].unsqueeze(1).repeat(
-                      1, self.pred_len + self.seq_len, 1)))
-        dec_out = dec_out.add(
-                  (means[:, 0, :].unsqueeze(1).repeat(
-                      1, self.pred_len + self.seq_len, 1)))
-        return dec_out
-
-    def classification(self, x_enc, x_mark_enc):
-        # embedding
-        enc_out = self.enc_embedding(x_enc, None)  # [B,T,C]
-        # TimesNet
-        for i in range(self.layer):
-            enc_out = self.layer_norm(self.model[i](enc_out))
-
-        # Output
-        # the output transformer encoder/decoder embeddings don't include non-linearity
-        output = self.act(enc_out)
-        output = self.dropout(output)
-        # zero-out padding embeddings
-        output = output * x_mark_enc.unsqueeze(-1)
-        # (batch_size, seq_length * d_model)
-        output = output.reshape(output.shape[0], -1)
-        output = self.projection(output)  # (batch_size, num_classes)
-        return output
-
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-            return dec_out[:, -self.pred_len:, :]  # [B, L, D]
-        if self.task_name == 'imputation':
-            dec_out = self.imputation(
-                x_enc, x_mark_enc, x_dec, x_mark_dec, mask)
-            return dec_out  # [B, L, D]
-        if self.task_name == 'anomaly_detection':
-            dec_out = self.anomaly_detection(x_enc)
-            return dec_out  # [B, L, D]
-        if self.task_name == 'classification':
-            dec_out = self.classification(x_enc, x_mark_enc)
-            return dec_out  # [B, N]
-        return None
+        # forecasting only (x_dec/x_mark_dec unused: we forecast by extending
+        # the encoder sequence, as in TimesNet)
+        dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
+        return dec_out[:, -self.pred_len:, :]  # [B, L, D]

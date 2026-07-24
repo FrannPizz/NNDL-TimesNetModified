@@ -58,6 +58,8 @@ if __name__ == '__main__':
     #MOFIFY 2: choose the conv type from the command line
     parser.add_argument('--use_inception', type=int, default=0,
                     help='1: original Inception multi-kernel block, 0: single fixed 3x3 kernel')
+    parser.add_argument('--use_2d', type=int, default=1,
+                    help='1: reshape 1D->2D and use 2D conv (paper); 0: keep 1D and use 1D conv (ablation)')
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
     parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')
     parser.add_argument('--c_out', type=int, default=7, help='output size')
