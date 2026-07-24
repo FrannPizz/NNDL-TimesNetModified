@@ -4,15 +4,16 @@ from layers.Embed import DataEmbedding
 from layers.Conv_Blocks import Inception_Block_V1
 
 #1D version of Inception_Block_V1: same multi-kernel idea but with Conv1d.
-#Used by the use_2d=0 ablation.
-class InceptionBlock1D(nn.Module):
+#Used by the use_2d=0 ablation. Only the lines marked "# DIFF" change vs the 2D version.
+class InceptionBlock1D(nn.Module):                                    
     def __init__(self, in_channels, out_channels, num_kernels=6, init_weight=True):
-        super(InceptionBlock1D, self).__init__()
+        super(InceptionBlock1D, self).__init__()                      
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_kernels = num_kernels
         kernels = []
         for i in range(self.num_kernels):
+            #difference 1 respect to 2D kernel:in 1D kernel runs over time only, not a 2D grid
             kernels.append(nn.Conv1d(in_channels, out_channels, kernel_size=2 * i + 1, padding=i))
         self.kernels = nn.ModuleList(kernels)
         if init_weight:
@@ -20,7 +21,7 @@ class InceptionBlock1D(nn.Module):
 
     def _initialize_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Conv1d):
+            if isinstance(m, nn.Conv1d):                              #difference 2 respect to 2D kernel: check must match the layers above
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
@@ -34,7 +35,6 @@ class InceptionBlock1D(nn.Module):
 
 #MODIFY 1: use a fixed period of 24 hours instead of finding the best period,
 #24 hours is the result of period_study.py on the train set
-
 FIXED_PERIOD = 24   #found by period_study.py on the train set 
 
 def fixed_period():
@@ -53,7 +53,7 @@ class TimesBlock(nn.Module):
         #MODIFY 3: choose whether to use 2D conv or 1D conv from the command line
         self.use_2d = configs.use_2d
 
-        #choose the conv type based on the command line arguments: 2D conv (InceptionBlock_V1) or 1D conv (InceptionBlock1D)
+        #MODIFY 3 (use_2d): pick the SPACE the convolution works in. 2D or 1D
         if self.use_2d == 1:
             InceptionBlock = Inception_Block_V1   # 2D, from layers
             Conv = nn.Conv2d
@@ -61,6 +61,7 @@ class TimesBlock(nn.Module):
             InceptionBlock = InceptionBlock1D     # 1D, defined in our class
             Conv = nn.Conv1d
 
+        #MODIFY 2 (use_inception): pick the kernel complexity. Inception or simple conv with one kernel
         if self.use_inception == 1:
             self.conv = nn.Sequential(
                 InceptionBlock(configs.d_model, configs.d_ff, num_kernels=configs.num_kernels),
@@ -78,10 +79,9 @@ class TimesBlock(nn.Module):
 
         B, _, N = x.size() 
 
-        #1D path (use_2d=0). No reshape, no period: just a 1D conv
-        #along time. This ablation tests whether the 2D reshaping matters.
+        #This is for 1D path only (use_2d=0). The 1D conv expects [B, channels, length] = [B, N, T], but our x is [B, T, N].
+        #so we permute the dimensions before and after the conv.
         if self.use_2d == 0:
-            #Conv1d wants [B, channels, length] = [B, N, T]; our x is [B, T, N]
             out = x.permute(0, 2, 1)
             out = self.conv(out)
             out = out.permute(0, 2, 1)

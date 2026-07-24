@@ -55,11 +55,12 @@ if __name__ == '__main__':
     parser.add_argument('--use_D', type=int, default=0, help='whether to use D for MambaSL')
     parser.add_argument('--top_k', type=int, default=5, help='for TimesBlock')
     parser.add_argument('--num_kernels', type=int, default=6, help='for Inception')
-    #MOFIFY 2: choose the conv type from the command line
+    # --- TimesNetModified additions ---
     parser.add_argument('--use_inception', type=int, default=0,
-                    help='1: original Inception multi-kernel block, 0: single fixed 3x3 kernel')
+                        help='TimesNetModified: 1 = original Inception multi-kernel block, 0 = single fixed size-3 kernel')
     parser.add_argument('--use_2d', type=int, default=1,
-                    help='1: reshape 1D->2D and use 2D conv (paper); 0: keep 1D and use 1D conv (ablation)')
+                        help='TimesNetModified: 1 = reshape 1D->2D and use 2D conv (paper), 0 = keep 1D and use 1D conv (ablation)')
+    # ----------------------------------
     parser.add_argument('--enc_in', type=int, default=7, help='encoder input size')
     parser.add_argument('--dec_in', type=int, default=7, help='decoder input size')
     parser.add_argument('--c_out', type=int, default=7, help='output size')
@@ -101,27 +102,11 @@ if __name__ == '__main__':
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 
-    # OurTimesNet (our re-implementation, see models/OurTimesNet.py):
-    # every architectural choice of TimesNet is exposed as a flag so that each
-    # ablation variant is a CLI configuration, not a separate model file.
-    # NOTE: these flags are NOT part of the auto-generated 'setting' string,
-    # so always use a distinct --model_id per variant (e.g. ABL_fixed24)
-    # to avoid overwriting checkpoints/curves of other variants.
-    parser.add_argument('--period_mode', type=str, default='fft', choices=['fft', 'fixed'],
-                        help='OurTimesNet: fft = discover top-k periods via FFT (paper); '
-                             'fixed = impose --fixed_periods (justified on the TRAINING split only, no test leakage)')
-    parser.add_argument('--fixed_periods', type=str, default='24',
-                        help='OurTimesNet: comma-separated periods in time steps, e.g. "24" or "24,168" (used when --period_mode fixed)')
-    parser.add_argument('--block_type', type=str, default='inception', choices=['inception', 'simple'],
-                        help='OurTimesNet: inception = multi-kernel conv block (paper); simple = single 3x3 conv (ablation)')
-    parser.add_argument('--use_2d', type=int, default=1, choices=[0, 1],
-                        help='OurTimesNet: 1 = 2D reshape by period (paper); 0 = plain 1D convolutions (ablation)')
-
-    # per-batch validation/test error tracking + plotting (on by default)
+    # per-batch val/test error tracking + plotting (used by exp_long_term_forecasting and the run_*.bat scripts)
     parser.add_argument('--track_batch_error', action='store_true', default=True,
-                        help='evaluate and record val/test error during training to plot error-vs-batch curves (default: on)')
+                        help='track and plot val/test error every --eval_every training batches')
     parser.add_argument('--no_track_batch_error', action='store_false', dest='track_batch_error',
-                        help='disable per-batch error tracking/plotting')
+                        help='disable per-batch error tracking')
     parser.add_argument('--eval_every', type=int, default=100,
                         help='stride (in training batches) between val/test evaluations when --track_batch_error is on')
 
@@ -252,7 +237,7 @@ if __name__ == '__main__':
                 args.embed,
                 args.distil,
                 args.des, ii)
-            
+
             # Override setting for specific model to ensure proper checkpoint naming and logging
             if args.model == 'MambaSingleLayer' and args.task_name == 'classification':
                 setting = f'{args.task_name}_CLS_{args.model_id}_{args.model}_{args.data}_ft{args.features}' \
@@ -293,7 +278,7 @@ if __name__ == '__main__':
             args.embed,
             args.distil,
             args.des, ii)
-        
+
         # Override setting for specific model to ensure proper checkpoint naming and logging
         if args.model == 'MambaSingleLayer' and args.task_name == 'classification':
             setting = f'{args.task_name}_CLS_{args.model_id}_{args.model}_{args.data}_ft{args.features}' \
